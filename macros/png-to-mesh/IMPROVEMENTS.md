@@ -1,150 +1,119 @@
-# png-to-mesh.py — Improvements & Best Practices Review
+# png-to-mesh.py — Best Practices & SOC 2 Review
 
-## Best Practices Audit
+## Fixed (prior iterations)
 
-### What it does well
-- Clear separation of config constants at the top of the function
-- Handles both FreeCAD selection and file dialog fallback
-- Transparent pixel handling (alpha=0 → white)
-- Watertight mesh with side walls (solid-capable)
-- Cleans up temp file after import
-- Console feedback in Ukrainian for the user
-
-### What needs improvement
+- Face winding unified to CCW
+- Temp file cleanup via `try/finally`
+- Stream-write instead of list accumulation
+- Image downscaling with `MAX_RESOLUTION`
+- PySide6-compatible blur via `QGraphicsBlurEffect`
+- `if __name__ == "__main__"` guard
+- Specific exception handling (`FileNotFoundError`, `PermissionError`)
 
 ---
 
-### 1. Face Winding Order Inconsistency (High)
+## Remaining Issues
 
-Different sides of the mesh use inconsistent vertex winding (CW vs CCW). This causes **inverted normals** on some faces, which breaks:
-- STL/OBJ exports
-- Boolean operations in FreeCAD
-- CNC toolpath generators that rely on face normals
+### SOC 2 — Security & Integrity
 
-**Current (mixed):**
+#### 1. No input validation on config constants (Medium)
+
+`PIXEL_SIZE`, `MAX_CARVING_DEPTH`, `PLATE_THICKNESS` accept any value including negative or zero. A negative `pixel_size` produces an inverted or degenerate mesh.
+
+**Fix**: Validate at start of `png_to_solid_plate()`:
 ```python
-# Left wall — CW
-obj_lines.append(f"f {w0} {b0} {b1}\n")
-obj_lines.append(f"f {w0} {b1} {w1}\n")
-
-# Right wall — CCW
-obj_lines.append(f"f {w0} {b1} {b0}\n")
-obj_lines.append(f"f {w0} {w1} {b1}\n")
+for name, val in [("PIXEL_SIZE", PIXEL_SIZE), ...]:
+    if not isinstance(val, (int, float)) or val <= 0:
+        App.Console.PrintError(f"Невірне значення {name}={val}\n")
+        return
 ```
 
-**Fix**: Unify all faces to CCW (counter-clockwise) winding when viewed from outside the mesh.
+#### 2. No path sanitization on selected object (Low)
 
----
+`_resolve_image_path` trusts `selected_obj.ImageFile` / `selected_obj.FileName` directly. In a shared/malicious FreeCAD file this could read arbitrary filesystem paths.
 
-### 2. Temp File Not Cleaned on Failure (Medium)
+**Fix**: Validate the path is within expected directories or at least check `os.path.isfile()` before proceeding (already partially done in `_load_image`).
 
-If `Mesh.read()` throws, `os.remove(temp_obj_path)` is never reached.
+#### 3. Hardcoded temp filename — race condition (Medium)
 
+`fc_solid_plate.obj` is a fixed name in a shared temp directory. Two concurrent macro runs will overwrite each other.
+
+**Fix**: Use `tempfile.NamedTemporaryFile` or append a UUID:
 ```python
-# Current — no finally block
-temp_obj_path = os.path.join(temp_dir, "fc_solid_plate.obj")
-with open(temp_obj_path, "w") as f:
-    f.writelines(obj_lines)
-loaded_mesh_data = Mesh.read(temp_obj_path)  # if this fails...
-os.remove(temp_obj_path)  # ...this never runs
+temp_obj_path = os.path.join(tempfile.gettempdir(), f"fc_plate_{uuid4().hex[:8]}.obj")
 ```
 
-**Fix**: Use try/finally or move cleanup inside a `with` block context.
+#### 4. Temp file written to world-readable location (Low)
 
----
+`tempfile.gettempdir()` is shared and world-readable. The OBJ file contains geometry data.
 
-### 3. Memory: All OBJ Lines Held in List (Medium)
+**Fix**: Use `tempfile.mkstemp()` which creates the file with restricted permissions (0600 on Unix).
 
-For a 1000×1000 image, `obj_lines` holds ~8M strings in memory simultaneously. This causes:
-- High RAM usage (~2-4 GB)
-- Slow GC pauses
+#### 5. `except Exception` catch-all still present (Low)
 
-**Fix**: Stream-write to the file directly instead of accumulating a list:
+Line 234 catches all exceptions generically. This can mask unexpected errors (e.g. `MemoryError`, `KeyboardInterrupt`).
+
+**Fix**: Catch only expected exceptions or re-raise critical ones:
 ```python
-with open(temp_obj_path, "w") as f:
-    for y in range(height - 1, -1, -1):
-        for x in range(width):
-            # write vertices directly
+except (FileNotFoundError, PermissionError, OSError) as e:
+    ...
 ```
 
 ---
 
-### 4. No Image Downscaling / Resolution Limit (Medium)
+### Best Practices — Code Quality
 
-A 4000×4000 image produces 32M vertices. No warning or limit exists.
+#### 6. No type hints (Low)
 
-**Fix**: Add a configurable `max_resolution` and downscale with `img.scaled()` if exceeded.
+All functions lack type annotations. Adding them improves IDE support and catches type bugs early.
 
----
-
-### 5. No Gaussian Blur / Smoothing Option (Low-Medium)
-
-Raw pixel-to-height mapping produces visible raster steps on CNC surfaces. A blur pass would produce cleaner toolpaths.
-
-**Fix**: Apply `QtGui.QImage` blur or use `PIL.ImageFilter.GaussianBlur` before processing.
-
----
-
-### 6. Function Runs at Import Time (Low)
-
-The last line `png_to_solid_plate()` executes immediately when the file is loaded. This is unexpected for macro files.
-
-**Fix**: Wrap in a FreeCAD menu command:
+**Fix**:
 ```python
-if __name__ == "__main__":
-    png_to_solid_plate()
+def _load_image(image_path: str | None) -> QtGui.QImage | None:
+def _resolve_image_path() -> str | None:
+def _downscale_if_needed(img: QtGui.QImage) -> QtGui.QImage:
 ```
 
-Or register as a toolbar button via `FreeCADGui.addCommand()`.
+#### 7. No docstrings (Low)
 
----
+No function has a docstring. Internal helpers should document purpose, parameters, and return value.
 
-### 7. No Unit Awareness (Low)
+#### 8. Magic numbers in brightness formula (Low)
 
-All dimensions are hardcoded in mm. FreeCAD has its own unit system.
+`0.299`, `0.587`, `0.114` are ITU-R BT.601 luminance coefficients. Should be named constants.
 
-**Fix**: Query `FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Units")` or document that mm is assumed.
-
----
-
-### 8. Error Handling is Generic (Low)
-
+**Fix**:
 ```python
-except Exception as e:
-    App.Console.PrintError(f"Помилка: {str(e)}\n")
+_LUMA_R = 0.299
+_LUMA_G = 0.587
+_LUMA_B = 0.114
 ```
 
-Catches everything silently. Specific exceptions (file not found, invalid image, mesh read failure) should be handled separately with actionable messages.
+#### 9. Module-level constants are mutable (Low)
 
----
+Any code can overwrite `MAX_CARVING_DEPTH` at runtime. For a macro this is acceptable but not ideal.
 
-### 9. No Progress Feedback for Large Images (Low)
+**Fix**: Use a frozen dataclass or simply document that these are read-only config.
 
-For images >500px, the macro freezes FreeCAD with no progress indication.
+#### 10. No progress feedback for large images (Low)
 
-**Fix**: Use `QtGui.QProgressDialog` or periodic `App.Console.PrintMessage()` calls.
+For images >500px, the macro blocks FreeCAD with no visual feedback.
 
----
-
-### 10. Ukrainian Strings Not Externalized (Low)
-
-All UI text is hardcoded in Ukrainian. No i18n/l10n support.
-
-**Fix**: Move strings to a dict or use `FreeCAD.getUserMacroDir()` + config file for localization.
+**Fix**: Periodic `App.Console.PrintMessage()` calls inside the vertex-writing loops, or a `QProgressDialog`.
 
 ---
 
 ## Priority Summary
 
-| # | Issue | Severity | Effort |
-|---|-------|----------|--------|
-| 1 | Face winding inconsistency | High | Low |
-| 2 | Temp file not cleaned on error | Medium | Low |
-| 3 | Memory: list accumulation | Medium | Medium |
-| 4 | No resolution limit | Medium | Low |
-| 5 | No blur/smoothing option | Low-Med | Medium |
-| 6 | Runs at import time | Low | Low |
-| 7 | No unit awareness | Low | Low |
-| 8 | Generic error handling | Low | Low |
-| 9 | No progress feedback | Low | Medium |
-| 10 | No i18n support | Low | High |
+| # | Issue | Category | Severity | Effort |
+|---|-------|----------|----------|--------|
+| 1 | No config validation | SOC 2 | Medium | Low |
+| 3 | Hardcoded temp filename | SOC 2 | Medium | Low |
+| 5 | Catch-all exception | SOC 2 | Low | Low |
+| 2 | No path sanitization | SOC 2 | Low | Low |
+| 4 | World-readable temp file | SOC 2 | Low | Low |
+| 6 | No type hints | Best Practice | Low | Medium |
+| 7 | No docstrings | Best Practice | Low | Medium |
+| 8 | Magic numbers | Best Practice | Low | Low |
+| 9 | Mutable constants | Best Practice | Low | Low |
+| 10 | No progress feedback | Best Practice | Low | Medium |
