@@ -6,14 +6,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+- `COLOR_MODE = "pick"` — interactive dialog: click on image to select surface color
+- `_ColorPickerDialog` — Qt dialog with image preview, crosshair cursor, color info display
+- `_pick_color_and_build_map()` — builds depth mapping from user-selected reference color
+- `CUSTOM_MAP` — user-defined brightness-to-depth gradient stops with linear interpolation
+- `_detect_color_mode()` — auto-detects background by analyzing mean brightness
+- `_brightness_to_depth()` — unified brightness-to-depth mapping dispatcher
+- `_interpolate_custom_map()` — linear interpolation over custom gradient stops
+- `_compute_brightness()` — calculates mean brightness of non-transparent pixels
+
 ### Fixed
 - Reversed color mapping: white pixels now carve deep, black stays at surface
 - `QImage.stackBlur()` AttributeError on PySide6 — replaced with `QGraphicsBlurEffect`
 - Missing `QtCore` import in `_downscale_if_needed`
+- PySide6 deprecation: `exec_()` → `exec()`
+- PySide6 deprecation: `event.pos()` → `event.position()`
 
-### Added
+### Changed
+- `README.md` — added color mode and custom map documentation
 - `IMPROVEMENTS.md` — best practices and SOC 2 audit
-- `CHANGELOG.md` — this file
 
 ## [1.1.0] - 2026-07-23
 

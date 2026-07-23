@@ -42,6 +42,34 @@ Edit the constants at the top of `png-to-mesh.py`:
 | `MAX_RESOLUTION` | `2000` px | Auto-downscale if image exceeds this |
 | `APPLY_BLUR` | `True` | Enable Gaussian blur pre-pass |
 | `BLUR_RADIUS` | `1.5` | Blur strength (higher = smoother) |
+| `COLOR_MODE` | `"auto"` | Color-to-depth mapping mode |
+
+### Color Modes
+
+| Mode | Behavior |
+|---|---|
+| `"auto"` | Analyzes image histogram. If mostly light → white=surface. If mostly dark → black=surface. |
+| `"light-bg"` | White = surface, black = carved deep |
+| `"dark-bg"` | Black = surface, white = carved deep |
+| `"custom"` | Use `CUSTOM_MAP` for full control over brightness-to-depth mapping |
+| `"pick"` | Interactive dialog — click on the image to choose the surface color |
+
+### Custom Map
+
+When `COLOR_MODE = "custom"`, define a list of `(brightness, depth_fraction)` pairs:
+
+```python
+CUSTOM_MAP = [
+    (0.0, 1.0),   # black  → full depth
+    (0.3, 0.0),   # dark gray → surface
+    (0.7, 0.0),   # light gray → surface
+    (1.0, 1.0),   # white  → full depth
+]
+```
+
+- `brightness`: `0.0` = black, `1.0` = white
+- `depth_fraction`: `0.0` = surface, `1.0` = max carving depth
+- Values between stops are linearly interpolated
 
 **Example**: A 400x300 px image at `PIXEL_SIZE=0.25` produces a `100x75 mm` plate.
 
