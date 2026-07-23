@@ -5,150 +5,220 @@ import tempfile
 import os
 import Mesh
 
-def png_to_solid_plate():
-    image_path = None
-    selection = Gui.Selection.getSelection()
-    
-    if selection:
-        selected_obj = selection[0]
-        if hasattr(selected_obj, "ImageFile"):
-            image_path = selected_obj.ImageFile
-        elif hasattr(selected_obj, "FileName"):
-            image_path = selected_obj.FileName
+# =========================================================
+# CONFIGURATION (edit values in mm)
+# =========================================================
+MAX_CARVING_DEPTH = 9.0
+PLATE_THICKNESS = 10.0
+PIXEL_SIZE = 0.25
+MAX_RESOLUTION = 2000
+APPLY_BLUR = True
+BLUR_RADIUS = 1.5
+# =========================================================
 
-    if not image_path:
-        file_dialog = QtGui.QFileDialog.getOpenFileName(None, "Оберіть PNG", "", "Images (*.png *.jpg *.jpeg)")
-        image_path = file_dialog[0] if isinstance(file_dialog, tuple) else file_dialog
 
+def _load_image(image_path):
     if not image_path or not os.path.exists(image_path):
+        return None
+    img = QtGui.QImage(image_path)
+    if img.isNull():
+        App.Console.PrintError(f"Не вдалося завантажити зображення: {image_path}\n")
+        return None
+    return img
+
+
+def _resolve_image_path():
+    selection = Gui.Selection.getSelection()
+    if selection:
+        obj = selection[0]
+        if hasattr(obj, "ImageFile"):
+            return obj.ImageFile
+        if hasattr(obj, "FileName"):
+            return obj.FileName
+
+    result = QtGui.QFileDialog.getOpenFileName(
+        None, "Оберіть зображення", "", "Images (*.png *.jpg *.jpeg)"
+    )
+    path = result[0] if isinstance(result, tuple) else result
+    return path if path else None
+
+
+def _downscale_if_needed(img):
+    w, h = img.width(), img.height()
+    if max(w, h) <= MAX_RESOLUTION:
+        return img
+    scale = MAX_RESOLUTION / max(w, h)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    App.Console.PrintMessage(
+        f"Зображення {w}x{h} > {MAX_RESOLUTION}px. "
+        f"Масштабування до {new_w}x{new_h}.\n"
+    )
+    return img.scaled(new_w, new_h, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+
+
+def _apply_blur(img, radius):
+    from PySide import QtCore
+    import sys
+
+    if not APPLY_BLUR or radius <= 0:
+        return img
+    filtered = QtGui.QImage(img)
+    # Qt native blur (stackBlur is fast, radius in 0-255 range)
+    qt_radius = min(int(radius * 20), 250)
+    filtered = filtered.stackBlur(qt_radius)
+    App.Console.PrintMessage(f"Застосовано Gaussian blur (radius={radius}).\n")
+    return filtered
+
+
+def _write_obj_header(f):
+    f.write("# FreeCAD CNC Plate — auto-generated OBJ\n")
+
+
+def _write_top_surface(f, img, width, height):
+    for y in range(height - 1, -1, -1):
+        for x in range(width):
+            color = QtGui.QColor(img.pixel(x, y))
+            if color.alpha() == 0:
+                brightness = 1.0
+            else:
+                brightness = (
+                    color.red() * 0.299
+                    + color.green() * 0.587
+                    + color.blue() * 0.114
+                ) / 255.0
+
+            depth = (1.0 - brightness) * MAX_CARVING_DEPTH
+            posZ = PLATE_THICKNESS - depth
+            posX = x * PIXEL_SIZE
+            posY = (height - 1 - y) * PIXEL_SIZE
+            f.write(f"v {posX:.4f} {posY:.4f} {posZ:.4f}\n")
+
+
+def _write_bottom_surface(f, width, height):
+    for y in range(height - 1, -1, -1):
+        for x in range(width):
+            posX = x * PIXEL_SIZE
+            posY = (height - 1 - y) * PIXEL_SIZE
+            f.write(f"v {posX:.4f} {posY:.4f} 0.0000\n")
+
+
+def _idx_top(y, x, width):
+    return y * width + x + 1
+
+
+def _idx_bot(y, x, width, total):
+    return y * width + x + 1 + total
+
+
+def _write_top_faces(f, width, height):
+    for y in range(height - 1):
+        for x in range(width - 1):
+            i0 = _idx_top(y, x, width)
+            i1 = _idx_top(y, x + 1, width)
+            i2 = _idx_top(y + 1, x, width)
+            i3 = _idx_top(y + 1, x + 1, width)
+            # CCW winding when viewed from outside (top)
+            f.write(f"f {i0} {i1} {i3}\n")
+            f.write(f"f {i0} {i3} {i2}\n")
+
+
+def _write_bottom_faces(f, width, height, total):
+    for y in range(height - 1):
+        for x in range(width - 1):
+            i0 = _idx_bot(y, x, width, total)
+            i1 = _idx_bot(y, x + 1, width, total)
+            i2 = _idx_bot(y + 1, x, width, total)
+            i3 = _idx_bot(y + 1, x + 1, width, total)
+            # CCW winding when viewed from outside (bottom = looking up)
+            f.write(f"f {i0} {i3} {i1}\n")
+            f.write(f"f {i0} {i2} {i3}\n")
+
+
+def _write_side_faces(f, width, height, total):
+    for y in range(height - 1):
+        # Left wall (x = 0)
+        wt = _idx_top(y, 0, width)
+        wb = _idx_top(y + 1, 0, width)
+        bt = _idx_bot(y, 0, width, total)
+        bb = _idx_bot(y + 1, 0, width, total)
+        f.write(f"f {wt} {bt} {bb}\n")
+        f.write(f"f {wt} {bb} {wb}\n")
+
+        # Right wall (x = width - 1)
+        wt = _idx_top(y, width - 1, width)
+        wb = _idx_top(y + 1, width - 1, width)
+        bt = _idx_bot(y, width - 1, width, total)
+        bb = _idx_bot(y + 1, width - 1, width, total)
+        f.write(f"f {wt} {bb} {bt}\n")
+        f.write(f"f {wt} {wb} {bb}\n")
+
+    for x in range(width - 1):
+        # Front wall (y = 0)
+        wt = _idx_top(0, x, width)
+        wb = _idx_top(0, x + 1, width)
+        bt = _idx_bot(0, x, width, total)
+        bb = _idx_bot(0, x + 1, width, total)
+        f.write(f"f {wt} {bb} {bt}\n")
+        f.write(f"f {wt} {wb} {bb}\n")
+
+        # Back wall (y = height - 1)
+        wt = _idx_top(height - 1, x, width)
+        wb = _idx_top(height - 1, x + 1, width)
+        bt = _idx_bot(height - 1, x, width, total)
+        bb = _idx_bot(height - 1, x + 1, width, total)
+        f.write(f"f {wt} {bt} {bb}\n")
+        f.write(f"f {wt} {bb} {wb}\n")
+
+
+def png_to_solid_plate():
+    from PySide import QtCore
+
+    image_path = _resolve_image_path()
+    img = _load_image(image_path)
+    if img is None:
         return
 
+    img = _downscale_if_needed(img)
+    img = _apply_blur(img, BLUR_RADIUS)
+
+    width = img.width()
+    height = img.height()
+    total = width * height
+
+    App.Console.PrintMessage(f"Розмір: {width}x{height} ({width * PIXEL_SIZE:.1f}x{height * PIXEL_SIZE:.1f} mm)\n")
+
+    temp_obj_path = os.path.join(tempfile.gettempdir(), "fc_solid_plate.obj")
     try:
-        img = QtGui.QImage(image_path)
-        if img.isNull(): return
-
-        # =========================================================
-        # НАЛАШТУВАННЯ ГЛИБИНИ ТА РОЗМІРІВ ДЛЯ ЧПУ (Вказуйте в мм)
-        # =========================================================
-        max_carving_depth = 9.0   # Максимальна глибина впадин (фрезерування)
-        plate_thickness = 10.0    # Загальна товщина плити-заготовки
-        pixel_size = 0.25         # Масштаб XY: фізичний розмір одного пікселя в мм
-        # =========================================================
-
-        width = img.width()
-        height = img.height()
-        
-        App.Console.PrintMessage(f"Розмір: {width}x{height}. Обчислення плити з впадинами...\n")
-        obj_lines = []
-
-        # 1. Створення точок рельєфу (Лицьова сторона)
-        # Обертаємо цикл Y (height-1 down to 0), щоб прибрати відзеркалення
-        for y in range(height - 1, -1, -1):
-            for x in range(width):
-                color = QtGui.QColor(img.pixel(x, y))
-                
-                # Обробка прозорості: якщо піксель прозорий (альфа = 0), вважаємо його білим фоном
-                if color.alpha() == 0:
-                    brightness = 1.0
-                else:
-                    brightness = (color.red() * 0.299 + color.green() * 0.587 + color.blue() * 0.114) / 255.0
-                
-                # ІНВЕРСІЯ: Темні пікселі йдуть глибше (фрезеруються), білі залишаються на поверхні
-                # Z починається від верхньої площини заготовки (plate_thickness) і йде вниз
-                depth = (1.0 - brightness) * max_carving_depth
-                posZ = plate_thickness - depth
-                
-                posX = x * pixel_size
-                posY = (height - 1 - y) * pixel_size
-                
-                obj_lines.append(f"v {posX:.4f} {posY:.4f} {posZ:.4f}\n")
-
-        # 2. Створення точок плоского дна плити (Z = 0)
-        # Вони дублюють сітку лицьової сторони, але лежать строго на нулі
-        for y in range(height - 1, -1, -1):
-            for x in range(width):
-                posX = x * pixel_size
-                posY = (height - 1 - y) * pixel_size
-                obj_lines.append(f"v {posX:.4f} {posY:.4f} 0.0000\n")
-
-        # 3. Зшиваємо грані (Faces)
-        total_pixels = width * height
-
-        # Лицьова поверхня (впадини логотипу)
-        for y in range(height - 1):
-            for x in range(width - 1):
-                i0 = y * width + x + 1
-                i1 = y * width + (x + 1) + 1
-                i2 = (y + 1) * width + x + 1
-                i3 = (y + 1) * width + (x + 1) + 1
-                obj_lines.append(f"f {i0} {i3} {i1}\n")
-                obj_lines.append(f"f {i0} {i2} {i3}\n")
-
-        # Нижня поверхня (абсолютно плоске дно заготовки)
-        for y in range(height - 1):
-            for x in range(width - 1):
-                i0 = y * width + x + 1 + total_pixels
-                i1 = y * width + (x + 1) + 1 + total_pixels
-                i2 = (y + 1) * width + x + 1 + total_pixels
-                i3 = (y + 1) * width + (x + 1) + 1 + total_pixels
-                obj_lines.append(f"f {i0} {i1} {i3}\n")
-                obj_lines.append(f"f {i0} {i3} {i2}\n")
-
-        # Бічні стінки плити (закриваємо контур, щоб меш став Solid)
-        # Ліва і права стінки
-        for y in range(height - 1):
-            # Ліва стінка (x = 0)
-            w0 = y * width + 1
-            w1 = (y + 1) * width + 1
-            b0 = w0 + total_pixels
-            b1 = w1 + total_pixels
-            obj_lines.append(f"f {w0} {b0} {b1}\n")
-            obj_lines.append(f"f {w0} {b1} {w1}\n")
-            
-            # Права стінка (x = width - 1)
-            w0 = y * width + width
-            w1 = (y + 1) * width + width
-            b0 = w0 + total_pixels
-            b1 = w1 + total_pixels
-            obj_lines.append(f"f {w0} {b1} {b0}\n")
-            obj_lines.append(f"f {w0} {w1} {b1}\n")
-
-        # Передня і задня стінки
-        for x in range(width - 1):
-            # Нижня стінка по екрану (y = 0)
-            w0 = x + 1
-            w1 = (x + 1) + 1
-            b0 = w0 + total_pixels
-            b1 = w1 + total_pixels
-            obj_lines.append(f"f {w0} {b1} {b0}\n")
-            obj_lines.append(f"f {w0} {w1} {b1}\n")
-
-            # Верхня стінка по екрану (y = height - 1)
-            w0 = (height - 1) * width + x + 1
-            w1 = (height - 1) * width + (x + 1) + 1
-            b0 = w0 + total_pixels
-            b1 = w1 + total_pixels
-            obj_lines.append(f"f {w0} {b0} {b1}\n")
-            obj_lines.append(f"f {w0} {b1} {w1}\n")
-
-        # Збереження та завантаження у FreeCAD
-        temp_dir = tempfile.gettempdir()
-        temp_obj_path = os.path.join(temp_dir, "fc_solid_plate.obj")
         with open(temp_obj_path, "w") as f:
-            f.writelines(obj_lines)
+            _write_obj_header(f)
+            _write_top_surface(f, img, width, height)
+            _write_bottom_surface(f, width, height)
+            _write_top_faces(f, width, height)
+            _write_bottom_faces(f, width, height, total)
+            _write_side_faces(f, width, height, total)
 
-        if not App.ActiveDocument: App.newDocument("CNC_Plate_Project")
+        if not App.ActiveDocument:
+            App.newDocument("CNC_Plate_Project")
         doc = App.ActiveDocument
 
-        loaded_mesh_data = Mesh.read(temp_obj_path)
+        mesh_data = Mesh.read(temp_obj_path)
         mesh_obj = doc.addObject("Mesh::Feature", "CNC_Solid_Plate")
-        mesh_obj.Mesh = loaded_mesh_data
-        
-        os.remove(temp_obj_path)
+        mesh_obj.Mesh = mesh_data
+
         doc.recompute()
         App.Console.PrintMessage("Плиту для ЧПУ успішно згенеровано!\n")
 
+    except FileNotFoundError:
+        App.Console.PrintError(f"Файл не знайдено: {temp_obj_path}\n")
+    except PermissionError:
+        App.Console.PrintError(f"Немає доступу для запису: {temp_obj_path}\n")
     except Exception as e:
         App.Console.PrintError(f"Помилка: {str(e)}\n")
+    finally:
+        if os.path.exists(temp_obj_path):
+            os.remove(temp_obj_path)
 
-png_to_solid_plate()
+
+if __name__ == "__main__":
+    png_to_solid_plate()
