@@ -10,7 +10,8 @@ import Mesh
 # =========================================================
 MAX_CARVING_DEPTH = 9.0
 PLATE_THICKNESS = 10.0
-PIXEL_SIZE = 0.25
+OUTPUT_WIDTH = 256.0      # desired mesh width in mm (X axis)
+OUTPUT_HEIGHT = 256.0     # desired mesh height in mm (Y axis)
 MAX_RESOLUTION = 2000
 APPLY_BLUR = True
 BLUR_RADIUS = 1.5
@@ -169,55 +170,102 @@ class _ColorPickerDialog:
 
         self._img = img
         self._ref_brightness = None
-        self._done = False
+        self._result = None
 
         self._pixmap = QtGui.QPixmap.fromImage(img)
 
         self._dialog = QtWidgets.QDialog()
-        self._dialog.setWindowTitle("Оберіть колір поверхні (клацніть на зображенні)")
-        self._dialog.setMinimumSize(400, 400)
+        self._dialog.setWindowTitle("Налаштування плити")
+        self._dialog.setMinimumSize(600, 500)
 
-        layout = QtWidgets.QVBoxLayout(self._dialog)
+        main_layout = QtWidgets.QHBoxLayout(self._dialog)
 
+        left = QtWidgets.QVBoxLayout()
         self._label = QtWidgets.QLabel()
-        self._label.setPixmap(self._pixmap)
+        self._label.setPixmap(self._pixmap.scaled(
+            350, 350, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+        ))
         self._label.setAlignment(QtCore.Qt.AlignCenter)
         self._label.setCursor(QtCore.Qt.CrossCursor)
         self._label.mousePressEvent = self._on_click
-        layout.addWidget(self._label)
+        left.addWidget(self._label)
 
-        self._info = QtWidgets.QLabel("Клацніть на піксель — колір стане рівнем поверхні (без глибини)")
-        layout.addWidget(self._info)
+        self._info = QtWidgets.QLabel("Клацніть на піксель — колір стане поверхнею")
+        left.addWidget(self._info)
 
         self._color_preview = QtWidgets.QLabel()
-        self._color_preview.setFixedHeight(30)
-        layout.addWidget(self._color_preview)
+        self._color_preview.setFixedHeight(25)
+        left.addWidget(self._color_preview)
+
+        main_layout.addLayout(left)
+
+        right = QtWidgets.QVBoxLayout()
+
+        right.addWidget(QtWidgets.QLabel("Параметри плити:"))
+
+        self._spin_depth = self._make_spin(right, "Макс. глибина (мм):", 0.1, 100.0, 1, MAX_CARVING_DEPTH)
+        self._spin_thickness = self._make_spin(right, "Товщина заготовки (мм):", 1.0, 500.0, 1, PLATE_THICKNESS)
+        self._spin_width = self._make_spin(right, "Ширина X (мм):", 1.0, 2000.0, 1, OUTPUT_WIDTH)
+        self._spin_height = self._make_spin(right, "Висота Y (мм):", 1.0, 2000.0, 1, OUTPUT_HEIGHT)
+
+        right.addSpacing(10)
+        right.addWidget(QtWidgets.QLabel("Інформація:"))
+        self._lbl_size = QtWidgets.QLabel()
+        self._lbl_size.setStyleSheet("color: #666; font-size: 11px;")
+        right.addWidget(self._lbl_size)
+
+        self._update_size_info()
+        self._spin_width.valueChanged.connect(self._update_size_info)
+        self._spin_height.valueChanged.connect(self._update_size_info)
+
+        right.addStretch()
+        main_layout.addLayout(right)
 
         btn_layout = QtWidgets.QHBoxLayout()
-        self._btn_confirm = QtWidgets.QPushButton("Підтвердити")
-        self._btn_confirm.setEnabled(False)
-        self._btn_confirm.clicked.connect(self._dialog.accept)
-        btn_layout.addWidget(self._btn_confirm)
+        btn_ok = QtWidgets.QPushButton("Згенерувати")
+        btn_ok.clicked.connect(self._on_accept)
+        btn_layout.addWidget(btn_ok)
+        btn_cancel = QtWidgets.QPushButton("Скасувати")
+        btn_cancel.clicked.connect(self._dialog.reject)
+        btn_layout.addWidget(btn_cancel)
+        right.addLayout(btn_layout)
 
-        self._btn_cancel = QtWidgets.QPushButton("Скасувати")
-        self._btn_cancel.clicked.connect(self._dialog.reject)
-        btn_layout.addWidget(self._btn_cancel)
+    def _make_spin(self, layout, label, min_val, max_val, decimals, default):
+        from PySide import QtWidgets
+        row = QtWidgets.QHBoxLayout()
+        lbl = QtWidgets.QLabel(label)
+        lbl.setFixedWidth(160)
+        spin = QtWidgets.QDoubleSpinBox()
+        spin.setRange(min_val, max_val)
+        spin.setDecimals(decimals)
+        spin.setSuffix(" мм")
+        spin.setValue(default)
+        row.addWidget(lbl)
+        row.addWidget(spin)
+        layout.addLayout(row)
+        if not hasattr(self, "_spins"):
+            self._spins = []
+        self._spins.append(spin)
+        return spin
 
-        layout.addLayout(btn_layout)
+    def _update_size_info(self):
+        w = self._spin_width.value()
+        h = self._spin_height.value()
+        px = w / self._img.width()
+        py = h / self._img.height()
+        self._lbl_size.setText(
+            f"Зображення: {self._img.width()}x{self._img.height()} px\n"
+            f"Плита: {w:.1f}x{h:.1f} mm\n"
+            f"Крок: {px:.4f}x{py:.4f} mm/px"
+        )
 
     def _on_click(self, event):
-        from PySide import QtCore
-
-        pos = event.pos()
-        x = pos.x()
-        y = pos.y()
-
+        pos = event.position()
         label_size = self._label.size()
         pixmap_size = self._pixmap.size()
 
-        img_x = int(x * pixmap_size.width() / label_size.width())
-        img_y = int(y * pixmap_size.height() / label_size.height())
-
+        img_x = int(pos.x() * pixmap_size.width() / label_size.width())
+        img_y = int(pos.y() * pixmap_size.height() / label_size.height())
         img_x = max(0, min(img_x, self._img.width() - 1))
         img_y = max(0, min(img_y, self._img.height() - 1))
 
@@ -229,28 +277,39 @@ class _ColorPickerDialog:
         hex_color = color.name()
         self._color_preview.setText(
             f"  RGB({color.red()}, {color.green()}, {color.blue()})  "
-            f"Яскравість: {self._ref_brightness:.3f}  {hex_color}  "
+            f"Яскравість: {self._ref_brightness:.3f}  {hex_color}"
         )
-        self._color_preview.setStyleSheet(f"background-color: {hex_color}; color: {'white' if self._ref_brightness < 0.5 else 'black'};")
-        self._btn_confirm.setEnabled(True)
-        self._info.setText(
-            f"Обрано: {hex_color} — цей колір буде на поверхні (глибина = 0)"
+        self._color_preview.setStyleSheet(
+            f"background-color: {hex_color}; color: {'white' if self._ref_brightness < 0.5 else 'black'};"
         )
+        self._info.setText(f"Обрано: {hex_color} — цей колір буде на поверхні (глибина = 0)")
+
+    def _on_accept(self):
+        if self._ref_brightness is None:
+            self._info.setText("Спочатку оберіть колір на зображенні!")
+            return
+        self._result = {
+            "ref_brightness": self._ref_brightness,
+            "max_depth": self._spin_depth.value(),
+            "thickness": self._spin_thickness.value(),
+            "width_mm": self._spin_width.value(),
+            "height_mm": self._spin_height.value(),
+        }
+        self._dialog.accept()
 
     def run(self):
-        result = self._dialog.exec_()
-        if result and self._ref_brightness is not None:
-            return self._ref_brightness
-        return None
+        self._dialog.exec()
+        return self._result
 
 
 def _pick_color_and_build_map(img):
     picker = _ColorPickerDialog(img)
-    ref = picker.run()
-    if ref is None:
-        App.Console.PrintMessage("Вибір кольору скасовано. Використовується auto-режим.\n")
-        return _detect_color_mode(img)
+    result = picker.run()
+    if result is None:
+        App.Console.PrintMessage("Скасовано. Використовується auto-режим.\n")
+        return None, None
 
+    ref = result["ref_brightness"]
     max_dist = max(ref, 1.0 - ref)
     if max_dist < 0.01:
         max_dist = 1.0
@@ -259,112 +318,124 @@ def _pick_color_and_build_map(img):
         return abs(brightness - ref) / max_dist
 
     App.Console.PrintMessage(
-        f"Обрано колір поверхні: яскравість={ref:.3f}. "
-        f"Інші кольори картуються за відстанню від нього.\n"
+        f"Обрано колір поверхні: яскравість={ref:.3f}\n"
     )
-    return map_fn
+    return map_fn, result
 
 
 def _write_obj_header(f):
     f.write("# FreeCAD CNC Plate — auto-generated OBJ\n")
 
 
-def _write_top_surface(f, img, width, height, color_mode):
-    for y in range(height - 1, -1, -1):
-        for x in range(width):
-            color = QtGui.QColor(img.pixel(x, y))
-            if color.alpha() == 0:
-                brightness = 1.0
-            else:
-                brightness = (
-                    color.red() * 0.299
-                    + color.green() * 0.587
-                    + color.blue() * 0.114
-                ) / 255.0
+def _calc_placement(img_w, img_h, out_w, out_h):
+    img_aspect = img_w / img_h
+    board_aspect = out_w / out_h
+    if img_aspect > board_aspect:
+        placed_w = out_w
+        placed_h = out_w / img_aspect
+    else:
+        placed_h = out_h
+        placed_w = out_h * img_aspect
+    offset_x = (out_w - placed_w) / 2
+    offset_y = (out_h - placed_h) / 2
+    return offset_x, offset_y, placed_w, placed_h
 
-            if callable(color_mode):
-                depth_frac = color_mode(brightness)
+
+def _write_top_surface(f, img, board_cols, board_rows, color_mode, pixel_x, pixel_y,
+                       offset_x, offset_y, img_w, img_h, max_depth, plate_thickness):
+    for row in range(board_rows):
+        for col in range(board_cols):
+            posX = col * pixel_x
+            posY = row * pixel_y
+            img_x = int((posX - offset_x) / pixel_x + 0.5)
+            img_y = int((posY - offset_y) / pixel_y + 0.5)
+            if 0 <= img_x < img_w and 0 <= img_y < img_h:
+                color = QtGui.QColor(img.pixel(img_x, img_y))
+                if color.alpha() == 0:
+                    brightness = 1.0
+                else:
+                    brightness = (
+                        color.red() * 0.299
+                        + color.green() * 0.587
+                        + color.blue() * 0.114
+                    ) / 255.0
+                if callable(color_mode):
+                    depth_frac = color_mode(brightness)
+                else:
+                    depth_frac = _brightness_to_depth(brightness, color_mode)
+                depth = depth_frac * max_depth
+                posZ = plate_thickness - depth
             else:
-                depth_frac = _brightness_to_depth(brightness, color_mode)
-            depth = depth_frac * MAX_CARVING_DEPTH
-            posZ = PLATE_THICKNESS - depth
-            posX = x * PIXEL_SIZE
-            posY = (height - 1 - y) * PIXEL_SIZE
+                posZ = plate_thickness
             f.write(f"v {posX:.4f} {posY:.4f} {posZ:.4f}\n")
 
 
-def _write_bottom_surface(f, width, height):
-    for y in range(height - 1, -1, -1):
-        for x in range(width):
-            posX = x * PIXEL_SIZE
-            posY = (height - 1 - y) * PIXEL_SIZE
+def _write_bottom_surface(f, board_cols, board_rows, pixel_x, pixel_y):
+    for row in range(board_rows):
+        for col in range(board_cols):
+            posX = col * pixel_x
+            posY = row * pixel_y
             f.write(f"v {posX:.4f} {posY:.4f} 0.0000\n")
 
 
-def _idx_top(y, x, width):
-    return y * width + x + 1
+def _idx_top(row, col, cols):
+    return row * cols + col + 1
 
 
-def _idx_bot(y, x, width, total):
-    return y * width + x + 1 + total
+def _idx_bot(row, col, cols, total_top):
+    return total_top + row * cols + col + 1
 
 
-def _write_top_faces(f, width, height):
-    for y in range(height - 1):
-        for x in range(width - 1):
-            i0 = _idx_top(y, x, width)
-            i1 = _idx_top(y, x + 1, width)
-            i2 = _idx_top(y + 1, x, width)
-            i3 = _idx_top(y + 1, x + 1, width)
-            # CCW winding when viewed from outside (top)
+def _write_top_faces(f, cols, rows):
+    for row in range(rows - 1):
+        for col in range(cols - 1):
+            i0 = _idx_top(row, col, cols)
+            i1 = _idx_top(row, col + 1, cols)
+            i2 = _idx_top(row + 1, col, cols)
+            i3 = _idx_top(row + 1, col + 1, cols)
             f.write(f"f {i0} {i1} {i3}\n")
             f.write(f"f {i0} {i3} {i2}\n")
 
 
-def _write_bottom_faces(f, width, height, total):
-    for y in range(height - 1):
-        for x in range(width - 1):
-            i0 = _idx_bot(y, x, width, total)
-            i1 = _idx_bot(y, x + 1, width, total)
-            i2 = _idx_bot(y + 1, x, width, total)
-            i3 = _idx_bot(y + 1, x + 1, width, total)
-            # CCW winding when viewed from outside (bottom = looking up)
+def _write_bottom_faces(f, cols, rows, total_top):
+    for row in range(rows - 1):
+        for col in range(cols - 1):
+            i0 = _idx_bot(row, col, cols, total_top)
+            i1 = _idx_bot(row, col + 1, cols, total_top)
+            i2 = _idx_bot(row + 1, col, cols, total_top)
+            i3 = _idx_bot(row + 1, col + 1, cols, total_top)
             f.write(f"f {i0} {i3} {i1}\n")
             f.write(f"f {i0} {i2} {i3}\n")
 
 
-def _write_side_faces(f, width, height, total):
-    for y in range(height - 1):
-        # Left wall (x = 0)
-        wt = _idx_top(y, 0, width)
-        wb = _idx_top(y + 1, 0, width)
-        bt = _idx_bot(y, 0, width, total)
-        bb = _idx_bot(y + 1, 0, width, total)
+def _write_side_faces(f, cols, rows, total_top):
+    for row in range(rows - 1):
+        wt = _idx_top(row, 0, cols)
+        wb = _idx_top(row + 1, 0, cols)
+        bt = _idx_bot(row, 0, cols, total_top)
+        bb = _idx_bot(row + 1, 0, cols, total_top)
         f.write(f"f {wt} {bt} {bb}\n")
         f.write(f"f {wt} {bb} {wb}\n")
 
-        # Right wall (x = width - 1)
-        wt = _idx_top(y, width - 1, width)
-        wb = _idx_top(y + 1, width - 1, width)
-        bt = _idx_bot(y, width - 1, width, total)
-        bb = _idx_bot(y + 1, width - 1, width, total)
+        wt = _idx_top(row, cols - 1, cols)
+        wb = _idx_top(row + 1, cols - 1, cols)
+        bt = _idx_bot(row, cols - 1, cols, total_top)
+        bb = _idx_bot(row + 1, cols - 1, cols, total_top)
         f.write(f"f {wt} {bb} {bt}\n")
         f.write(f"f {wt} {wb} {bb}\n")
 
-    for x in range(width - 1):
-        # Front wall (y = 0)
-        wt = _idx_top(0, x, width)
-        wb = _idx_top(0, x + 1, width)
-        bt = _idx_bot(0, x, width, total)
-        bb = _idx_bot(0, x + 1, width, total)
+    for col in range(cols - 1):
+        wt = _idx_top(0, col, cols)
+        wb = _idx_top(0, col + 1, cols)
+        bt = _idx_bot(0, col, cols, total_top)
+        bb = _idx_bot(0, col + 1, cols, total_top)
         f.write(f"f {wt} {bb} {bt}\n")
         f.write(f"f {wt} {wb} {bb}\n")
 
-        # Back wall (y = height - 1)
-        wt = _idx_top(height - 1, x, width)
-        wb = _idx_top(height - 1, x + 1, width)
-        bt = _idx_bot(height - 1, x, width, total)
-        bb = _idx_bot(height - 1, x + 1, width, total)
+        wt = _idx_top(rows - 1, col, cols)
+        wb = _idx_top(rows - 1, col + 1, cols)
+        bt = _idx_bot(rows - 1, col, cols, total_top)
+        bb = _idx_bot(rows - 1, col + 1, cols, total_top)
         f.write(f"f {wt} {bt} {bb}\n")
         f.write(f"f {wt} {bb} {wb}\n")
 
@@ -379,30 +450,60 @@ def png_to_solid_plate():
     img = _apply_blur(img, BLUR_RADIUS)
 
     color_mode = COLOR_MODE
+    params = None
+
     if color_mode == "auto":
         color_mode = _detect_color_mode(img)
     elif color_mode == "pick":
-        color_mode = _pick_color_and_build_map(img)
+        color_mode, params = _pick_color_and_build_map(img)
+        if color_mode is None:
+            color_mode = _detect_color_mode(img)
+            params = None
+
     if isinstance(color_mode, str):
         App.Console.PrintMessage(f"Режим кольору: {color_mode}\n")
     else:
         App.Console.PrintMessage(f"Режим кольору: pick (інтерактивний)\n")
 
+    if params:
+        max_depth = params["max_depth"]
+        plate_thickness = params["thickness"]
+        out_w = params["width_mm"]
+        out_h = params["height_mm"]
+    else:
+        max_depth = MAX_CARVING_DEPTH
+        plate_thickness = PLATE_THICKNESS
+        out_w = OUTPUT_WIDTH
+        out_h = OUTPUT_HEIGHT
+
     width = img.width()
     height = img.height()
-    total = width * height
 
-    App.Console.PrintMessage(f"Розмір: {width}x{height} ({width * PIXEL_SIZE:.1f}x{height * PIXEL_SIZE:.1f} mm)\n")
+    offset_x, offset_y, placed_w, placed_h = _calc_placement(width, height, out_w, out_h)
+    pixel_x = placed_w / width
+    pixel_y = placed_h / height
+    cols = int(round(out_w / pixel_x)) + 1
+    rows = int(round(out_h / pixel_y)) + 1
+    total_top = cols * rows
+
+    App.Console.PrintMessage(
+        f"Зображення: {width}x{height} px\n"
+        f"Плита: {out_w:.1f}x{out_h:.1f} mm, товщина {plate_thickness:.1f} mm\n"
+        f"Зображення на пластині: {placed_w:.1f}x{placed_h:.1f} mm "
+        f"(зміщення {offset_x:.1f}, {offset_y:.1f})\n"
+        f"Глибина: {max_depth:.1f} mm, крок {pixel_x:.4f}x{pixel_y:.4f} mm/px\n"
+    )
 
     temp_obj_path = os.path.join(tempfile.gettempdir(), "fc_solid_plate.obj")
     try:
         with open(temp_obj_path, "w") as f:
             _write_obj_header(f)
-            _write_top_surface(f, img, width, height, color_mode)
-            _write_bottom_surface(f, width, height)
-            _write_top_faces(f, width, height)
-            _write_bottom_faces(f, width, height, total)
-            _write_side_faces(f, width, height, total)
+            _write_top_surface(f, img, cols, rows, color_mode, pixel_x, pixel_y,
+                               offset_x, offset_y, width, height, max_depth, plate_thickness)
+            _write_bottom_surface(f, cols, rows, pixel_x, pixel_y)
+            _write_top_faces(f, cols, rows)
+            _write_bottom_faces(f, cols, rows, total_top)
+            _write_side_faces(f, cols, rows, total_top)
 
         if not App.ActiveDocument:
             App.newDocument("CNC_Plate_Project")

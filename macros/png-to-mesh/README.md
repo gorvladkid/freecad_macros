@@ -38,11 +38,12 @@ Edit the constants at the top of `png-to-mesh.py`:
 |---|---|---|
 | `MAX_CARVING_DEPTH` | `9.0` mm | Maximum depth of carved recesses |
 | `PLATE_THICKNESS` | `10.0` mm | Total thickness of the blank plate |
-| `PIXEL_SIZE` | `0.25` mm | Physical XY size of one pixel |
+| `OUTPUT_WIDTH` | `256.0` mm | Desired mesh width (X axis) |
+| `OUTPUT_HEIGHT` | `256.0` mm | Desired mesh height (Y axis) |
 | `MAX_RESOLUTION` | `2000` px | Auto-downscale if image exceeds this |
 | `APPLY_BLUR` | `True` | Enable Gaussian blur pre-pass |
 | `BLUR_RADIUS` | `1.5` | Blur strength (higher = smoother) |
-| `COLOR_MODE` | `"auto"` | Color-to-depth mapping mode |
+| `COLOR_MODE` | `"pick"` | Color-to-depth mapping mode |
 
 ### Color Modes
 
@@ -71,7 +72,7 @@ CUSTOM_MAP = [
 - `depth_fraction`: `0.0` = surface, `1.0` = max carving depth
 - Values between stops are linearly interpolated
 
-**Example**: A 400x300 px image at `PIXEL_SIZE=0.25` produces a `100x75 mm` plate.
+**Example**: A 1024x1024 px image with `OUTPUT_WIDTH=600`, `OUTPUT_HEIGHT=600` produces a `600x600 mm` plate (pixel step = 0.586 mm). Set `OUTPUT_WIDTH=100`, `OUTPUT_HEIGHT=100` for a `100x100 mm` plate — no need to resize the image.
 
 ## Supported Formats
 
