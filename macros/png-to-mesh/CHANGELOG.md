@@ -7,8 +7,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- `_calc_placement()` — aspect-ratio-preserving placement: image centered on board, scaled to fit
+- `_ColorPickerDialog` — unified dialog with image preview, color picker, and all settings (depth, thickness, width, height)
 - `COLOR_MODE = "pick"` — interactive dialog: click on image to select surface color
-- `_ColorPickerDialog` — Qt dialog with image preview, crosshair cursor, color info display
 - `_pick_color_and_build_map()` — builds depth mapping from user-selected reference color
 - `CUSTOM_MAP` — user-defined brightness-to-depth gradient stops with linear interpolation
 - `_detect_color_mode()` — auto-detects background by analyzing mean brightness
@@ -16,16 +17,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/).
 - `_interpolate_custom_map()` — linear interpolation over custom gradient stops
 - `_compute_brightness()` — calculates mean brightness of non-transparent pixels
 
+### Changed
+- `_write_top_surface()` — generates full board grid; pixels outside image area are flat surface
+- `_write_bottom_surface()` — uses board grid dimensions instead of image dimensions
+- All face/index functions (`_idx_top`, `_idx_bot`, `_write_top_faces`, `_write_bottom_faces`, `_write_side_faces`) — use `cols`×`rows` board grid instead of image pixel dimensions
+- Board grid: `cols = round(out_w / pixel_x) + 1`, `rows = round(out_h / pixel_y) + 1`
+- Dialog parameters override module-level `OUTPUT_WIDTH`/`OUTPUT_HEIGHT`/`MAX_CARVING_DEPTH`/`PLATE_THICKNESS`
+- `png-to-mesh-black-and-white.py` synced with choose-color version
+
 ### Fixed
 - Reversed color mapping: white pixels now carve deep, black stays at surface
 - `QImage.stackBlur()` AttributeError on PySide6 — replaced with `QGraphicsBlurEffect`
 - Missing `QtCore` import in `_downscale_if_needed`
 - PySide6 deprecation: `exec_()` → `exec()`
 - PySide6 deprecation: `event.pos()` → `event.position()`
-
-### Changed
-- `README.md` — added color mode and custom map documentation
-- `IMPROVEMENTS.md` — best practices and SOC 2 audit
 
 ## [1.1.0] - 2026-07-23
 

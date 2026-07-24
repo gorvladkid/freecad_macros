@@ -11,9 +11,18 @@ Generates a relief heightmap from an image where:
 
 The output is a watertight OBJ mesh (top surface, flat bottom, side walls) imported into FreeCAD as a `Mesh::Feature` object.
 
+### Aspect-Ratio-Preserving Placement
+
+When the image aspect ratio differs from the board size, the image is centered on the board and scaled to fit while preserving its proportions. The remaining area is flat board surface.
+
+**Example**: 1024×1024 image on a 500×250 mm board:
+- Image placed as 250×250 mm (centered on 500 mm width)
+- Left/right borders (125 mm each) are flat board
+- Top/bottom flush with board edges
+
 ## Installation
 
-Copy `png-to-mesh.py` to your FreeCAD Macros directory:
+Copy `png-to-mesh-choose-color.py` to your FreeCAD Macros directory:
 
 | OS | Path |
 |---|---|
@@ -28,22 +37,27 @@ Restart FreeCAD or reload via **Macro > Macros > Refresh**.
 1. Open FreeCAD with an active document
 2. **Option A** — Select an image object in the document (must have `ImageFile` or `FileName` property), then run the macro
 3. **Option B** — Run the macro directly; a file dialog will open to pick an image
-4. The mesh is imported as `CNC_Solid_Plate`
+4. If `COLOR_MODE = "pick"` (default), a dialog opens with:
+   - Image preview — click to select the surface color
+   - Settings: depth, thickness, width, height
+5. The mesh is imported as `CNC_Solid_Plate`
 
 ## Configuration
 
-Edit the constants at the top of `png-to-mesh.py`:
+Edit the constants at the top of `png-to-mesh-choose-color.py`:
 
 | Parameter | Default | Description |
 |---|---|---|
-| `MAX_CARVING_DEPTH` | `9.0` mm | Maximum depth of carved recesses |
-| `PLATE_THICKNESS` | `10.0` mm | Total thickness of the blank plate |
-| `OUTPUT_WIDTH` | `256.0` mm | Desired mesh width (X axis) |
-| `OUTPUT_HEIGHT` | `256.0` mm | Desired mesh height (Y axis) |
+| `MAX_CARVING_DEPTH` | `9.0` mm | Maximum depth of carved recesses (fallback if dialog cancelled) |
+| `PLATE_THICKNESS` | `10.0` mm | Total thickness of the blank plate (fallback if dialog cancelled) |
+| `OUTPUT_WIDTH` | `256.0` mm | Desired board width X (fallback if dialog cancelled) |
+| `OUTPUT_HEIGHT` | `256.0` mm | Desired board height Y (fallback if dialog cancelled) |
 | `MAX_RESOLUTION` | `2000` px | Auto-downscale if image exceeds this |
 | `APPLY_BLUR` | `True` | Enable Gaussian blur pre-pass |
 | `BLUR_RADIUS` | `1.5` | Blur strength (higher = smoother) |
 | `COLOR_MODE` | `"pick"` | Color-to-depth mapping mode |
+
+When `COLOR_MODE = "pick"`, the dialog overrides `MAX_CARVING_DEPTH`, `PLATE_THICKNESS`, `OUTPUT_WIDTH`, and `OUTPUT_HEIGHT` with user-entered values.
 
 ### Color Modes
 
@@ -53,7 +67,7 @@ Edit the constants at the top of `png-to-mesh.py`:
 | `"light-bg"` | White = surface, black = carved deep |
 | `"dark-bg"` | Black = surface, white = carved deep |
 | `"custom"` | Use `CUSTOM_MAP` for full control over brightness-to-depth mapping |
-| `"pick"` | Interactive dialog — click on the image to choose the surface color |
+| `"pick"` | Interactive dialog — click on the image to choose the surface color, set all params |
 
 ### Custom Map
 
@@ -71,8 +85,6 @@ CUSTOM_MAP = [
 - `brightness`: `0.0` = black, `1.0` = white
 - `depth_fraction`: `0.0` = surface, `1.0` = max carving depth
 - Values between stops are linearly interpolated
-
-**Example**: A 1024x1024 px image with `OUTPUT_WIDTH=600`, `OUTPUT_HEIGHT=600` produces a `600x600 mm` plate (pixel step = 0.586 mm). Set `OUTPUT_WIDTH=100`, `OUTPUT_HEIGHT=100` for a `100x100 mm` plate — no need to resize the image.
 
 ## Supported Formats
 
